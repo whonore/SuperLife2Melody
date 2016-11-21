@@ -174,23 +174,38 @@ var getSection = Routine {|init|
 /*** Main loop ***/
 
 var main = {
-    var win, stopButton;
-    var img, seg, segSize, segOff, segMax;
+    var win, stopButton, nextButton;
+    var imgs, img, seg, segSize, segOff, segMax;
     var root, mode, tempo;
     var play, clock;
 
-    // Initialize display
-    win = Window.new("name", resizable: false).front;
-    win.view.background = Color.white;
-    stopButton = Button(win, Rect(0, 0, win.bounds.width, win.bounds.height));
-    stopButton.states = [["Stop", Color.black, Color.white]];
-    stopButton.action = { play.stop; win.close; };
-
     // Initialize input
-    img = Image.new(thisProcess.nowExecutingPath.dirname +/+ "imgs/space.png");
+    imgs = PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs").files;
+    img = Image.new(imgs.choose.fullPath);
     segSize = 40;
     segOff = 0;
     segMax = img.height;
+
+    // Initialize display
+    win = Window.new("name", resizable: false).front;
+    win.bounds = img.bounds.height_(img.bounds.height + 30);
+    win.view.backgroundImage = img;
+
+    stopButton = Button(win, Rect(0, img.bounds.height, win.bounds.width / 2, 30));
+    stopButton.states = [["Stop", Color.black, Color.white]];
+    stopButton.action = { play.stop; win.close; };
+
+    nextButton = Button(win, stopButton.bounds.left_(win.bounds.width / 2));
+    nextButton.states = [["Next", Color.black, Color.white]];
+    nextButton.action = {
+        img = Image.new(imgs.choose.fullPath);
+        segMax = img.height;
+
+        win.bounds = img.bounds.height_(img.bounds.height + 30);
+        win.view.backgroundImage = img;
+        stopButton.bounds = Rect(0, img.bounds.height, win.bounds.width / 2, 30);
+        nextButton.bounds = stopButton.bounds.left_(win.bounds.width / 2);
+    };
 
     // Song loop
     play = Routine {
@@ -233,7 +248,6 @@ var main = {
             // Wait for section to end
             segOff = (segOff + 1) % segMax;
             clock.bars2beats(sectionBars).wait;
-            //1.wait;
         };
     };
 
