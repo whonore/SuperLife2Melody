@@ -77,12 +77,13 @@ var analyze = {|img|
 
 /*** Music algorithms ***/
 
+//
 var updateRoot = Routine {|root = 0|
     inf.do {
         yield(root);
 
         root = root;
-    }
+    };
 };
 
 //
@@ -114,6 +115,7 @@ var updateMode = Routine {|mode = \mixolydian|
     };
 };
 
+//
 var updateTempo = Routine {|tempo = 60|
     var oldEnergy, newEnergy, dEnergy;
     var oldChaos, newChaos, dChaos;
@@ -130,9 +132,51 @@ var updateTempo = Routine {|tempo = 60|
 
         oldEnergy = newEnergy;
         oldChaos = newChaos;
-    }
+    };
 };
 
+//
+var makeChords = {|durs, disp, chaos|
+    var chords, chordTrans, chord2Type, type2Chord;
+
+    chordTrans = (
+        tonic: [[\tonic, 0.5], [\subdom, 0], [\dom, 0.5]],
+        subdom: [[\tonic, 0], [\subdom, 0.1], [\dom, 0.9]],
+        dom: [[\tonic, 0.9], [\subdom, 0], [\dom, 0.1]]
+    );
+    chord2Type = (
+        0: \tonic, 2: \tonic, 5: \tonic,
+        1: \subdom, 3: \subdom,
+        4: \dom, 6: \dom
+    );
+    type2Chord = (
+        tonic: [0, 2, 5],
+        subdom: [1, 3],
+        dom: [4, 6]
+    );
+    chords = List[0];
+
+    (durs.size - 1).do {|idx|
+        var type, wchords;
+
+        type = chord2Type[chords[idx]];
+        wchords = chordTrans[type].flop;
+        wchords[1] = wchords[1] + chaos.rand;
+        wchords[1] = wchords[1].normalizeSum;
+
+        type = wchoose(wchords[0], wchords[1]);
+        chords.add(type2Chord[type].choose);
+    };
+
+    chords;
+};
+
+//
+var makeMelody = {|chords, disp, chaos|
+    0 ! chords.size;
+};
+
+//
 var getSection = Routine {|init|
     var sectionBars, root, mode;
     var amp, durs, sustain;
@@ -140,30 +184,51 @@ var getSection = Routine {|init|
     var oldDisp, newDisp, dDisp;
     var oldEnergy, newEnergy, dEnergy;
     var oldChaos, newChaos, dChaos;
+    var lead, pad;
     var section;
 
     # sectionBars, root, mode = init;
-    amp = 0.5;
+    amp = 0.5 ! (4 * sectionBars);
     durs = 1 ! (4 * sectionBars);
-    sustain = 1;
-    section = Pbind(
-        \amp, amp,
-        \dur, Pseq(durs),
-        \sustain, sustain,
-        \scale, Scale.at(mode),
-        \ctranspose, root
-    );
+    sustain = 1 ! (4 * sectionBars);
+
     oldDisp = 0.5;
     oldEnergy = 0.5;
     oldChaos = 0.5;
 
+    chords = makeChords.value(durs, oldDisp, oldChaos);
+    notes = makeMelody.value(chords, oldDisp, oldChaos);
+
     inf.do {
+        chords.postln;
+        notes.postln;
+        lead = Pbind(
+            \instrument, \default,
+            \degree, Pseq(notes),
+            \amp, Pseq(amp),
+            \dur, Pseq(durs),
+            \sustain, Pseq(sustain),
+            \scale, Scale.at(mode),
+            \ctranspose, root
+        );
+        pad = Pbind(
+            \instrument, \default,
+            \degree, Pseq(chords),
+            \amp, Pseq(amp),
+            \dur, Pseq(durs),
+            \sustain, Pseq(sustain),
+            \scale, Scale.at(mode),
+            \ctranspose, root
+        );
+        section = Ppar([lead, pad, Padd(\degree, 2, pad), Padd(\degree, 4, pad)]);
+
         # newDisp, newEnergy, newChaos, root, mode = yield(section);
         dDisp = newDisp - oldDisp;
         dEnergy = newEnergy - oldEnergy;
         dChaos = newChaos - oldChaos;
 
-        section = section;
+        chords = makeChords.value(durs, newDisp, newChaos);
+        notes = makeMelody.value(chords, newDisp, newChaos);
 
         oldDisp = newDisp;
         oldEnergy = newEnergy;
@@ -173,6 +238,7 @@ var getSection = Routine {|init|
 
 /*** Main loop ***/
 
+//
 var main = {
     var win, stopButton, nextButton;
     var imgs, img, seg, segSize, segOff, segMax;
@@ -181,13 +247,14 @@ var main = {
 
     // Initialize input
     imgs = PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs").files;
+    imgs = [PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs/trees.png")];
     img = Image.new(imgs.choose.fullPath);
     segSize = 40;
     segOff = 0;
     segMax = img.height;
 
     // Initialize display
-    win = Window.new("name", resizable: false).front;
+    win = Window.new("Super Life 2 Melody", resizable: false).front;
     win.bounds = img.bounds.height_(img.bounds.height + 30);
     win.view.backgroundImage = img;
 
@@ -228,7 +295,7 @@ var main = {
             root = updateRoot.next();
             mode = updateMode.next(inVars[\disposition]);
             tempo = updateTempo.next([inVars[\energy], inVars[\chaos]]);
-            //[segOff, root, mode, tempo].postln;
+            [root, mode, tempo].postln;
             inVars.postln;
 
             // Play next section
@@ -258,3 +325,23 @@ var main = {
 
 main.value();
 );
+
+x = Pbind(\degree, Pseq([0,1,2]));
+y = Padd(\degree, 2, x);
+z = Padd(\degree, 4, x);
+Ppar([x, y, z]).play;
+
+[1,2,3].wchoose([0.1, 0.8, 0.1]);
+wchoose([1,2,3], [0.1, 0.7, 0.2]);
+x = Pbind(\degree, Pseq([0, 7])).play;
+x = (\a: 1, \b: 1, \c: 2);
+x.invert;
+
+{3.rand} ! 4
+
+[1,2,3] + 4;
+x = [[1,2,3], [0.1, 0.7, 0.2]];
+wchoose(*x);
+
+PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs").files;
+[PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs/tree.png")]
