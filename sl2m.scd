@@ -1,12 +1,23 @@
 (
 /** Image processing **/
 
-// Take nrows of an image, skipping the first off rows
-var getSegment = {|img, nrows, off|
-    var seg;
+// Take a random nrows x ncols section of img
+var getSegment = {|img, nrows, ncols|
+    var seg, pixels, startRow, startCol;
 
-    seg = Image.new(img.width, min(nrows, img.height - off));
-    seg.pixels = img.pixels[off * img.width .. (off + nrows) * img.width];
+    nrows = min(nrows, img.height);
+    ncols = min(ncols, img.width);
+
+    startRow = (img.height - nrows + 1).rand;
+    startCol = (img.width - ncols + 1).rand;
+
+    // Take nrows, then just the first ncols of each row
+    pixels = img.pixels[startRow * img.width .. ((startRow + nrows) * img.width) - 1];
+    pixels = pixels.reshape(nrows, img.width);
+    pixels = pixels.collect {|row| row[startCol .. (startCol + ncols) - 1]; };
+
+    seg = Image.new(ncols, nrows);
+    seg.pixels = Int32Array.newFrom(pixels.flat);
 
     seg;
 };
@@ -141,16 +152,11 @@ var getDurs = {|sectionBars, energy, chaos|
     var durs;
     var subDivs, energyLvl, subDiv;
 
-    subDivs = (
-        high: [8, 16],
-        mid: [2, 4],
-        low: [1]
-    );
-    energyLvl = [\low, \mid, \high][energy.linlin(0, 1, 0, 2).round];
-    subDiv = subDivs[energyLvl].choose;
-    if ((subDiv > 2) && { 1.0.rand < chaos }, { subDiv = subDiv + [-1, 1].choose; });
+    subDivs = [[1, 2], [4, 8]];
+    subDiv = subDivs[energy.round].choose;
+    //if ((subDiv > 2) && { 1.0.rand < chaos }, { subDiv = subDiv + [-1, 1].choose; });
 
-    durs = (subDiv.reciprocal) ! (sectionBars * 4 * subDiv);
+    durs = (4 / subDiv) ! (sectionBars * subDiv);
 
     durs.sum.postln;
     durs;
@@ -260,7 +266,7 @@ var getSection = Routine {|init|
             \degree, Pseq(notes),
             \amp, Pseq(amp),
             \dur, Pseq(durs),
-            \sustain, Pseq(sustain),
+            // \sustain, Pseq(sustain),
             \scale, Scale.at(mode),
             \ctranspose, root,
             \octave, [5, 6].choose
@@ -270,12 +276,13 @@ var getSection = Routine {|init|
             \degree, Pseq(chords),
             \amp, Pseq(amp),
             \dur, Pseq(durs),
-            \sustain, Pseq(sustain),
+            // \sustain, Pseq(sustain),
             \scale, Scale.at(mode),
             \ctranspose, root,
             \octave, 4
         );
         section = Ppar([lead, pad, Padd(\degree, 2, pad), Padd(\degree, 4, pad)]);
+        section = lead;
 
         # newDisp, newEnergy, newChaos, root, mode = yield(section);
         dDisp = newDisp - oldDisp;
@@ -299,18 +306,16 @@ var getSection = Routine {|init|
 //
 var main = {
     var win, stopButton, nextButton;
-    var imgs, img, seg, segSize, segOff, segMax;
+    var imgs, img, seg, segSize;
     var root, mode, tempo;
     var play, clock;
 
     // Initialize input
     imgs = PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs").files;
-    imgs = [PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs/trees.png")];
+    //imgs = [PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs/trees.png")];
     imgs = Pxrand(imgs, inf).asStream;
     img = Image.new(imgs.next.fullPath);
     segSize = 40;
-    segOff = 0;
-    segMax = img.height;
 
     // Initialize display
     win = Window.new("Super Life 2 Melody", resizable: false).front;
@@ -325,7 +330,6 @@ var main = {
     nextButton.states = [["Next", Color.black, Color.white]];
     nextButton.action = {
         img = Image.new(imgs.next.fullPath);
-        segMax = img.height;
 
         win.bounds = img.bounds.height_(img.bounds.height + 30);
         win.view.backgroundImage = img;
@@ -355,7 +359,7 @@ var main = {
             mode = updateMode.next(inVars[\disposition]);
             tempo = updateTempo.next([inVars[\energy], inVars[\chaos]]);
 
-            "Root: %, Mode: %, Tempo: %\n".postf(root, mode, tempo);
+            "Root: %, Mode: %, Tempo: %\n".postf(root, mode, 60 * tempo);
             inVars.postln;
 
             // Play next section
@@ -368,12 +372,12 @@ var main = {
 
             // Update input values
             {
-                seg = getSegment.value(img, segSize, segOff);
+                seg = getSegment.value(img, segSize, segSize);
                 inVars = analyze.value(seg);
             }.defer;
 
             // Wait for section to end
-            segOff = (segOff + 1) % segMax;
+
             clock.bars2beats(sectionBars).wait;
         };
     };
