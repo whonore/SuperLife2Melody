@@ -50,6 +50,7 @@ var analyze = {|img|
 
     // Compare amount of red to blue (in range [-1, 1])
     vars[\disposition] = ((reds.sum - blues.sum) / (reds.sum + blues.sum + greens.sum));
+    if (vars[\disposition].isNaN, { vars[\disposition] = 0; });
 
     // Take the average brightness (in range [0, 1])
     // Brightness of (r,g,b) is mean of min(r,g,b) and max(r,g,b)
@@ -79,10 +80,10 @@ var analyze = {|img|
     vars[\chaos] = diffs.mean;
 
     // Scale values to be in [0, 1]
-    vars[\disposition] = vars[\disposition].linlin(-1, 1, 0, 1);
+    /*vars[\disposition] = vars[\disposition].linlin(-1, 1, 0, 1);
     vars[\energy] = vars[\energy];
     vars[\chaos] = vars[\chaos];
-
+    */
     vars;
 };
 
@@ -129,7 +130,7 @@ var updateMode = Routine {|initDisp|
     // Initialize mode
     oldDisp.linlin(0, 1, 0, 6).round.postln;
     mode = [
-        \major, \lydian, \mixolydian, \dorian, \minor, \phrygian, \locrian
+        \locrian, \phyrgian, \minor, \dorian, \mixolydian, \lydian, \major
     ][oldDisp.linlin(0, 1, 0, 6).round];
 
     inf.do {
@@ -189,7 +190,7 @@ var getAmps = {|durs, energy, chaos|
     var amp;
 
     amp = Array.fill(durs.size, {
-        energy.linlin(0, 1, 0.3, 1) + ([-1, 1].choose * chaos.linlin(0, 1, 0, 0.1).rand);
+        energy.linlin(0, 1, 0.3, 0.7) + ([-1, 1].choose * chaos.linlin(0, 1, 0, 0.1).rand);
     });
 
     amp;
@@ -360,14 +361,26 @@ var main = {
 
     // Song loop
     play = Routine {
-        var inited;
-        var inVars, section, sectionBars;
+        var inited, section, sectionBars;
+        var inVars, minVars, maxVars;
 
         // Initialize values
         inited = Condition.new(false);
         {
-            seg = getSegment.value(img, segSize, segSize);
-            inVars = analyze.value(seg);
+            // Find bounds for vars
+            minVars = ();
+            maxVars = ();
+            10.do {
+                seg = getSegment.value(img, segSize, segSize);
+                inVars = analyze.value(seg);
+                minVars = merge(inVars, minVars, {|x, y| min(x, y); });
+                maxVars = merge(inVars, maxVars, {|x, y| max(x, y); });
+            };
+
+            inVars = inVars.collect {|v, k|
+                v.linlin(minVars[k], maxVars[k], 0, 1);
+            };
+
             segWin = seg.plot("Current Segment");
 
             inited.test = true;
@@ -377,6 +390,8 @@ var main = {
 
         // Wait for values to be initialized
         inited.wait;
+        minVars.postln;
+        maxVars.postln;
 
         inf.do {
             // Update global music values
@@ -399,6 +414,14 @@ var main = {
                 segWin.close;
                 seg = getSegment.value(img, segSize, segSize);
                 inVars = analyze.value(seg);
+
+                // Rescale inVars
+                minVars = merge(inVars, minVars, {|x, y| min(x, y); });
+                maxVars = merge(inVars, maxVars, {|x, y| max(x, y); });
+                inVars = inVars.collect {|v, k|
+                    v.linlin(minVars[k], maxVars[k], 0, 1);
+                };
+
                 segWin = seg.plot("Current Segment");
             }.defer;
 
