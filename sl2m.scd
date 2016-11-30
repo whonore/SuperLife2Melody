@@ -89,17 +89,29 @@ var analyze = {|img|
 /*** Music algorithms ***/
 
 //
-var updateRoot = Routine {|root = 0|
-    inf.do {
-        yield(root);
+var updateRoot = Routine {|initDisp|
+    var root;
+    var oldDisp, newDisp, dDisp;
 
+    oldDisp = initDisp;
+
+    // Initialize root
+    root = 0;
+
+    inf.do {
+        newDisp = yield(root);
+        dDisp = newDisp - oldDisp;
+
+        // Update root
         root = root;
+
+        oldDisp = newDisp;
     };
 };
 
 //
-var updateMode = Routine {|mode = \dorian|
-    var trans, thresh;
+var updateMode = Routine {|initDisp|
+    var mode, trans, thresh;
     var oldDisp, newDisp, dDisp;
 
     trans = (
@@ -112,12 +124,19 @@ var updateMode = Routine {|mode = \dorian|
         locrian: (up: [\minor], down: [\locrian])
     );
     thresh = 0.05;
-    oldDisp = 0.5;
+    oldDisp = initDisp;
+
+    // Initialize mode
+    oldDisp.linlin(0, 1, 0, 6).round.postln;
+    mode = [
+        \major, \lydian, \mixolydian, \dorian, \minor, \phrygian, \locrian
+    ][oldDisp.linlin(0, 1, 0, 6).round];
 
     inf.do {
         newDisp = yield(mode);
         dDisp = newDisp - oldDisp;
 
+        // Update mode
         mode = case
         { dDisp > thresh } { trans[mode][\up].choose } // Go up
         { dDisp < thresh.neg } { trans[mode][\down].choose } // Go down
@@ -128,18 +147,22 @@ var updateMode = Routine {|mode = \dorian|
 };
 
 //
-var updateTempo = Routine {|tempo = 60|
+var updateTempo = Routine {|init|
+    var tempo;
     var oldEnergy, newEnergy, dEnergy;
     var oldChaos, newChaos, dChaos;
 
-    oldEnergy = 0.5;
-    oldChaos = 0.5;
+    # oldEnergy, oldChaos = init;
+
+    // Initialize tempo
+    tempo = 60;
 
     inf.do {
         # newEnergy, newChaos = yield(tempo / 60);
         dEnergy = newEnergy - oldEnergy;
         dChaos = newChaos - oldChaos;
 
+        // Update tempo
         tempo = tempo;
 
         oldEnergy = newEnergy;
@@ -240,12 +263,9 @@ var getSection = Routine {|init|
     var lead, pad;
     var section;
 
-    # sectionBars, root, mode = init;
+    # oldDisp, oldEnergy, oldChaos, sectionBars, root, mode = init;
 
-    oldDisp = 0.5;
-    oldEnergy = 0.5;
-    oldChaos = 0.5;
-
+    // Initialize values
     durs = getDurs.value(sectionBars, oldEnergy, oldChaos);
     amp = getAmps.value(durs, oldEnergy, oldChaos);
     sustain = 1 ! (4 * sectionBars);
@@ -254,12 +274,12 @@ var getSection = Routine {|init|
     notes = getMelody.value(chords, oldDisp, oldChaos);
 
     inf.do {
-        "".postln;
         "Amp: %\n".postf(amp);
         "Durs: %\n".postf(durs);
         "Chords: %\n".postf(chords);
         "Notes: %\n".postf(notes);
 
+        // Create instruments
         lead = Pbind(
             \instrument, \default,
             \degree, Pseq(notes),
@@ -281,13 +301,13 @@ var getSection = Routine {|init|
             \octave, 4
         );
         section = Ppar([lead, pad, Padd(\degree, 2, pad), Padd(\degree, 4, pad)]);
-        section = lead;
 
-        # newDisp, newEnergy, newChaos, root, mode = yield(section);
+        # newDisp, newEnergy, newChaos, sectionBars, root, mode = yield(section);
         dDisp = newDisp - oldDisp;
         dEnergy = newEnergy - oldEnergy;
         dChaos = newChaos - oldChaos;
 
+        // Update values
         durs = getDurs.value(sectionBars, newEnergy, newChaos);
         amp = getAmps.value(durs, newEnergy, newChaos);
 
@@ -311,7 +331,6 @@ var main = {
 
     // Initialize input
     imgs = PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs").files;
-    //imgs = [PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs/trees.png")];
     imgs = Pxrand(imgs, inf).asStream;
     img = Image.new(imgs.next.fullPath);
     segSize = 40;
@@ -323,7 +342,7 @@ var main = {
 
     stopButton = Button(win, Rect(0, img.bounds.height, win.bounds.width / 2, 30));
     stopButton.states = [["Stop", Color.black, Color.white]];
-    stopButton.action = { play.stop; win.close; };
+    stopButton.action = { play.stop; win.close; segWin.close; };
 
     nextButton = Button(win, stopButton.bounds.left_(win.bounds.width / 2));
     nextButton.states = [["Next", Color.black, Color.white]];
@@ -336,38 +355,39 @@ var main = {
         nextButton.bounds = stopButton.bounds.left_(win.bounds.width / 2);
     };
 
-    segWin = Window.new();
-
     // Song loop
     play = Routine {
+        var inited;
         var inVars, section, sectionBars;
 
         // Initialize values
-        inVars = (disposition: 0.5, energy: 0.5, chaos: 0.5);
+        inited = Condition.new(false);
+        {
+            seg = getSegment.value(img, segSize, segSize);
+            inVars = analyze.value(seg);
+            segWin = seg.plot("Current Segment");
+
+            inited.test = true;
+            inited.signal;
+        }.defer;
         sectionBars = 4;
 
-        // Initialize global music values
-        updateRoot.next(0);
-        updateMode.next(\dorian);
-        updateTempo.next(60);
-
-        // Initialize section
-        getSection.next([sectionBars, 0, \dorian]);
+        // Wait for values to be initialized
+        inited.wait;
 
         inf.do {
             // Update global music values
-            root = updateRoot.next();
+            root = updateRoot.next(inVars[\disposition]);
             mode = updateMode.next(inVars[\disposition]);
             tempo = updateTempo.next([inVars[\energy], inVars[\chaos]]);
 
-            "Root: %, Mode: %, Tempo: %\n".postf(root, mode, 60 * tempo);
-            inVars.postln;
+            "\n%\nRoot: %, Mode: %, Tempo: %\n".postf(inVars, root, mode, 60 * tempo);
 
             // Play next section
             clock.tempo = tempo;
             section = getSection.next([
                 inVars[\disposition], inVars[\energy], inVars[\chaos],
-                root, mode
+                sectionBars, root, mode
             ]);
             section.play(clock);
 
@@ -380,7 +400,6 @@ var main = {
             }.defer;
 
             // Wait for section to end
-
             clock.bars2beats(sectionBars).wait;
         };
     };
