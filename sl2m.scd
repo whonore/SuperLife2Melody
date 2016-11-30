@@ -158,7 +158,6 @@ var getDurs = {|sectionBars, energy, chaos|
 
     durs = (4 / subDiv) ! (sectionBars * subDiv);
 
-    durs.sum.postln;
     durs;
 };
 
@@ -305,7 +304,7 @@ var getSection = Routine {|init|
 
 //
 var main = {
-    var win, stopButton, nextButton;
+    var win, segWin, stopButton, nextButton;
     var imgs, img, seg, segSize;
     var root, mode, tempo;
     var play, clock;
@@ -336,6 +335,8 @@ var main = {
         stopButton.bounds = Rect(0, img.bounds.height, win.bounds.width / 2, 30);
         nextButton.bounds = stopButton.bounds.left_(win.bounds.width / 2);
     };
+
+    segWin = Window.new();
 
     // Song loop
     play = Routine {
@@ -372,8 +373,10 @@ var main = {
 
             // Update input values
             {
+                segWin.close;
                 seg = getSegment.value(img, segSize, segSize);
                 inVars = analyze.value(seg);
+                segWin = seg.plot("Current Segment");
             }.defer;
 
             // Wait for section to end
