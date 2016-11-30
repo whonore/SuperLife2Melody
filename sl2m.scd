@@ -236,17 +236,20 @@ var getChords = {|durs, disp, chaos|
 //
 var getMelody = {|chords, disp, chaos|
     var notes;
-    var cons, diss, thresh;
+    var cons, diss, wcons, wdiss, thresh;
 
     cons = [0, 2, 4];
     diss = [1, 3, 6];
 
-    notes = chords.collect {|ch|
-        var choices;
+    wcons = 2 ! cons.size;
+    wdiss = chaos ! diss.size;
 
-        choices = [ch, ch + 2, ch + 4];
-        choices = choices ++ if (1.0.rand < chaos, { cons }, { diss });
-        choices.asSet.choose;
+    notes = chords.collect {|ch|
+        var choices, wchoices;
+
+        choices = [ch, ch + 2, ch + 4, cons, diss].flat;
+        wchoices = [1, 1, 1, wcons, wdiss].flat;
+        choices.wchoose(wchoices.normalizeSum(1));
     };
 
     notes;
