@@ -169,11 +169,11 @@ var alignTime = {|durs1, durs2|
 /*** Music Algorithms ***/
 
 //
-var updateRoot = Routine {|initDisp|
+var updateRoot = Routine {|initVars|
     var root, thresh;
-    var oldDisp, newDisp, dDisp;
+    var oldVars, newVars, dVars;
 
-    oldDisp = initDisp;
+    oldVars = initVars;
     thresh = 0.05;
 
     // Initialize root
@@ -182,25 +182,25 @@ var updateRoot = Routine {|initDisp|
     inf.do {
         var choices;
 
-        newDisp = yield(root);
-        dDisp = newDisp - oldDisp;
+        newVars = yield(root);
+        dVars = merge(newVars, oldVars, {|x, y| x - y; });
 
         choices = root + [-2, -1, 1, 2];
         choices = choices.clip2(3);
 
         // Update root
         root = case
-        { abs(dDisp) > thresh } { choices.asSet.choose; } //
+        { abs(dVars[\disposition]) > thresh } { choices.asSet.choose; } //
         { root }; // No change
 
-        oldDisp = newDisp;
+        oldVars = newVars;
     };
 };
 
 //
-var updateMode = Routine {|initDisp|
+var updateMode = Routine {|initVars|
     var mode, trans, thresh;
-    var oldDisp, newDisp, dDisp;
+    var oldVars, newVars, dVars;
 
     trans = (
         major: (up: [\major], down: [\lydian, \mixolydian]),
@@ -212,59 +212,55 @@ var updateMode = Routine {|initDisp|
         locrian: (up: [\minor], down: [\locrian])
     );
     thresh = 0.05;
-    oldDisp = initDisp;
+    oldVars = initVars;
 
     // Initialize mode
-    oldDisp.linlin(0, 1, 0, 6).round;
     mode = [
         \locrian, \phrygian, \minor, \dorian, \mixolydian, \lydian, \major
-    ][oldDisp.linlin(0, 1, 0, 6).round];
+    ][oldVars[\disposition].linlin(0, 1, 0, 6).round];
 
     inf.do {
-        newDisp = yield(mode);
-        dDisp = newDisp - oldDisp;
+        newVars = yield(mode);
+        dVars = merge(newVars, oldVars, {|x, y| x - y; });
 
         // Update mode
         mode = case
-        { dDisp > thresh } { trans[mode][\up].choose } // Go up
-        { dDisp < thresh.neg } { trans[mode][\down].choose } // Go down
+        { dVars[\disposition] > thresh } { trans[mode][\up].choose } // Go up
+        { dVars[\disposition] < thresh.neg } { trans[mode][\down].choose } // Go down
         { mode }; // No change
 
-        oldDisp = newDisp;
+        oldVars = newVars;
     };
 };
 
 //
-var updateTempo = Routine {|init|
+var updateTempo = Routine {|initVars|
     var tempo;
-    var oldEnergy, newEnergy, dEnergy;
-    var oldChaos, newChaos, dChaos;
+    var oldVars, newVars, dVars;
 
-    # oldEnergy, oldChaos = init;
+    oldVars = initVars;
 
     // Initialize tempo
     tempo = 60;
 
     inf.do {
-        # newEnergy, newChaos = yield(tempo / 60);
-        dEnergy = newEnergy - oldEnergy;
-        dChaos = newChaos - oldChaos;
+        newVars = yield(tempo / 60);
+        dVars = merge(newVars, oldVars, {|x, y| x - y; });
 
         // Update tempo
         tempo = tempo;
 
-        oldEnergy = newEnergy;
-        oldChaos = newChaos;
+        oldVars = newVars;
     };
 };
 
 //
-var getPadDurs = {|sectionBars, energy, chaos|
+var getPadDurs = {|inVars, sectionBars|
     var durs;
-    var subDivs, energyLvl, subDiv;
+    var subDivs, subDiv;
 
     subDivs = [[1, 2], [4, 8]];
-    subDiv = subDivs[energy.round].choose;
+    subDiv = subDivs[inVars[\energy].round].choose;
     //if ((subDiv > 2) && { 1.0.rand < chaos }, { subDiv = subDiv + [-1, 1].choose; });
 
     durs = (4 / subDiv) ! (sectionBars * subDiv);
@@ -273,8 +269,9 @@ var getPadDurs = {|sectionBars, energy, chaos|
 };
 
 //
-var getLeadDurs = {|padDurs, energy, chaos|
-    var durs, choices, choice;
+var getLeadDurs = {|inVars, padDurs|
+    var durs;
+    var choices, choice;
 
     choices = (
         half: {|dur| dur[0, 2 ..] * 2; }, // Only works assuming padDurs is even in length
@@ -284,7 +281,7 @@ var getLeadDurs = {|padDurs, energy, chaos|
         quad: {|dur| dur.stutter(4) / 4; }
     );
 
-    choice = [\half, \same, \double, \triple, \quad][energy.linlin(0, 1, 0, 4).round];
+    choice = [\half, \same, \double, \triple, \quad][inVars[\energy].linlin(0, 1, 0, 4).round];
 
     durs = choices[choice].value(padDurs);
 
@@ -296,19 +293,20 @@ var getLeadDurs = {|padDurs, energy, chaos|
 };
 
 //
-var getAmps = {|durs, energy, chaos|
+var getAmps = {|inVars, durs|
     var amp;
 
     amp = Array.fill(durs.size, {
-        energy.linlin(0, 1, 0.3, 0.7) + ([-1, 1].choose * chaos.linlin(0, 1, 0, 0.1).rand);
+        inVars[\energy].linlin(0, 1, 0.3, 0.7) + ([-1, 1].choose * inVars[\chaos].linlin(0, 1, 0, 0.1).rand);
     });
 
     amp;
 };
 
 //
-var getChords = {|durs, disp, chaos|
-    var chords, chordTrans, chord2Type, type2Chord;
+var getChords = {|inVars, durs|
+    var chords;
+    var chordTrans, chord2Type, type2Chord;
 
     chordTrans = (
         tonic: [[\tonic, 0.5], [\subdom, 0], [\dom, 0.5]],
@@ -328,14 +326,12 @@ var getChords = {|durs, disp, chaos|
     chords = Array.new(durs.size);
     chords.add(0);
 
-    chaos = chaos.linlin(0, 1, 0, 0.2);
-
     (durs.size - 1).do {
         var type, wchords;
 
         type = chord2Type[chords.last];
         wchords = chordTrans[type].flop;
-        wchords[1] = wchords[1] + chaos.rand;
+        wchords[1] = wchords[1] + inVars[\chaos].linlin(0, 1, 0, 0.2).rand;
         wchords[1] = wchords[1].normalizeSum;
 
         type = wchoose(wchords[0], wchords[1]);
@@ -346,7 +342,7 @@ var getChords = {|durs, disp, chaos|
 };
 
 //
-var getMelody = {|leadDurs, padDurs, chords, disp, chaos|
+var getMelody = {|inVars, leadDurs, padDurs, chords|
     var notes, aligned;
     var cons, diss, wcons, wdiss, thresh;
 
@@ -356,7 +352,7 @@ var getMelody = {|leadDurs, padDurs, chords, disp, chaos|
     diss = [1, 3, 6];
 
     wcons = 2 ! cons.size;
-    wdiss = chaos ! diss.size;
+    wdiss = inVars[\chaos] ! diss.size;
 
     notes = Array.fill(leadDurs.size, {|idx|
         var chord, choices, wchoices;
@@ -376,22 +372,20 @@ var getSection = Routine {|init|
     var sectionBars, root, mode;
     var leadAmps, padAmps, leadDurs, padDurs;
     var chords, notes;
-    var oldDisp, newDisp, dDisp;
-    var oldEnergy, newEnergy, dEnergy;
-    var oldChaos, newChaos, dChaos;
+    var oldVars, newVars, dVars;
     var lead, pad;
     var section;
 
-    # oldDisp, oldEnergy, oldChaos, sectionBars, root, mode = init;
+    # oldVars, sectionBars, root, mode = init;
 
     // Initialize values
-    padDurs = getPadDurs.value(sectionBars, oldEnergy, oldChaos);
-    padAmps = getAmps.value(padDurs, oldEnergy, oldChaos);
-    leadDurs = getLeadDurs.value(padDurs, oldEnergy, oldChaos);
-    leadAmps = getAmps.value(leadDurs, oldEnergy, oldChaos);
+    padDurs = getPadDurs.value(oldVars, sectionBars);
+    padAmps = getAmps.value(oldVars, padDurs);
+    leadDurs = getLeadDurs.value(oldVars, padDurs);
+    leadAmps = getAmps.value(oldVars, leadDurs);
 
-    chords = getChords.value(padDurs, oldDisp, oldChaos);
-    notes = getMelody.value(leadDurs, padDurs, chords, oldDisp, oldChaos);
+    chords = getChords.value(oldVars, padDurs);
+    notes = getMelody.value(oldVars, leadDurs, padDurs, chords);
 
     inf.do {
         "Lead Amps: %\n".postf(leadAmps);
@@ -429,23 +423,19 @@ var getSection = Routine {|init|
         );
         section = Ppar([lead, pad]);
 
-        # newDisp, newEnergy, newChaos, sectionBars, root, mode = yield(section);
-        dDisp = newDisp - oldDisp;
-        dEnergy = newEnergy - oldEnergy;
-        dChaos = newChaos - oldChaos;
+        # newVars, sectionBars, root, mode = yield(section);
+        dVars = merge(newVars, oldVars, {|x, y| x - y; });
 
         // Update values
-        padDurs = getPadDurs.value(sectionBars, newEnergy, newChaos);
-        padAmps = getAmps.value(padDurs, newEnergy, newChaos);
-        leadDurs = getLeadDurs.value(padDurs, newEnergy, newChaos);
-        leadAmps = getAmps.value(leadDurs, newEnergy, newChaos);
+        padDurs = getPadDurs.value(newVars, sectionBars);
+        padAmps = getAmps.value(newVars, padDurs);
+        leadDurs = getLeadDurs.value(newVars, padDurs);
+        leadAmps = getAmps.value(newVars, leadDurs);
 
-        chords = getChords.value(padDurs, newDisp, newChaos);
-        notes = getMelody.value(leadDurs, padDurs, chords, newDisp, newChaos);
+        chords = getChords.value(newVars, padDurs);
+        notes = getMelody.value(newVars, leadDurs, padDurs, chords);
 
-        oldDisp = newDisp;
-        oldEnergy = newEnergy;
-        oldChaos = newChaos;
+        oldVars = newVars;
     };
 };
 
@@ -518,18 +508,15 @@ var main = {
 
         inf.do {
             // Update global music values
-            root = updateRoot.next(inVars[\disposition]);
-            mode = updateMode.next(inVars[\disposition]);
-            tempo = updateTempo.next([inVars[\energy], inVars[\chaos]]);
+            root = updateRoot.next(inVars);
+            mode = updateMode.next(inVars);
+            tempo = updateTempo.next(inVars);
 
             "\n%\nRoot: %, Mode: %, Tempo: %\n".postf(inVars, root, mode, 60 * tempo);
 
             // Play next section
             clock.tempo = tempo;
-            section = getSection.next([
-                inVars[\disposition], inVars[\energy], inVars[\chaos],
-                sectionBars, root, mode
-            ]);
+            section = getSection.next([inVars, sectionBars, root, mode]);
             section.play(clock);
 
             // Update input values
