@@ -62,7 +62,7 @@ SynthDef(\choruscompresseffect, {|out = 0, gate = 1|
 
 /*** Music ***/
 (
-/*** Image processing ***/
+/*** Image Processing ***/
 
 // Take a random nrows x ncols section of img
 var getSegment = {|img, nrows, ncols|
@@ -142,32 +142,56 @@ var analyze = {|img|
     };
     vars[\chaos] = diffs.mean;
 
-    // Scale values to be in [0, 1]
-    /*vars[\disposition] = vars[\disposition].linlin(-1, 1, 0, 1);
-    vars[\energy] = vars[\energy];
-    vars[\chaos] = vars[\chaos];
-    */
     vars;
 };
 
-/*** Music algorithms ***/
+/*** Helper Functions ***/
+
+// Align two lists of durations by time
+var alignTime = {|durs1, durs2|
+    var aligned, parSum1, parSum2;
+
+    // Create lists of the start times of each note
+    parSum1 = durs1.integrate - durs1;
+    parSum2 = durs2.integrate - durs2;
+
+    // For each time in durs1, find the index of the corresponding time
+    // in durs2 or the next largest time
+    aligned = List[];
+    parSum1.do {|time|
+        aligned.add(parSum2.indexOfGreaterThan(time) ? parSum2.size);
+    };
+
+    // Return the time-aligned mapping of indices
+    aligned - 1;
+};
+
+/*** Music Algorithms ***/
 
 //
 var updateRoot = Routine {|initDisp|
-    var root;
+    var root, thresh;
     var oldDisp, newDisp, dDisp;
 
     oldDisp = initDisp;
+    thresh = 0.05;
 
     // Initialize root
     root = 0;
 
     inf.do {
+        var choices;
+
         newDisp = yield(root);
         dDisp = newDisp - oldDisp;
 
+        choices = root + [-2, -1, 1, 2];
+        choices = choices.clip2(3);
+
         // Update root
-        root = root;
+        root = case
+        { abs(dDisp) > thresh } { choices.asSet.choose; } //
+        { root }; // No change
 
         oldDisp = newDisp;
     };
@@ -191,7 +215,7 @@ var updateMode = Routine {|initDisp|
     oldDisp = initDisp;
 
     // Initialize mode
-    oldDisp.linlin(0, 1, 0, 6).round.postln;
+    oldDisp.linlin(0, 1, 0, 6).round;
     mode = [
         \locrian, \phrygian, \minor, \dorian, \mixolydian, \lydian, \major
     ][oldDisp.linlin(0, 1, 0, 6).round];
@@ -235,7 +259,7 @@ var updateTempo = Routine {|init|
 };
 
 //
-var getDurs = {|sectionBars, energy, chaos|
+var getPadDurs = {|sectionBars, energy, chaos|
     var durs;
     var subDivs, energyLvl, subDiv;
 
@@ -244,6 +268,29 @@ var getDurs = {|sectionBars, energy, chaos|
     //if ((subDiv > 2) && { 1.0.rand < chaos }, { subDiv = subDiv + [-1, 1].choose; });
 
     durs = (4 / subDiv) ! (sectionBars * subDiv);
+
+    durs;
+};
+
+//
+var getLeadDurs = {|padDurs, energy, chaos|
+    var durs, choices, choice;
+
+    choices = (
+        half: {|dur| dur[0, 2 ..] * 2; }, // Only works assuming padDurs is even in length
+        same: {|dur| dur; },
+        double: {|dur| dur.stutter(2) / 2; },
+        triple: {|dur| dur.stutter(3) / 3; },
+        quad: {|dur| dur.stutter(4) / 4; }
+    );
+
+    choice = [\half, \same, \double, \triple, \quad][energy.linlin(0, 1, 0, 4).round];
+
+    durs = choices[choice].value(padDurs);
+
+    // durs +/- chaos
+
+    durs = durs.normalizeSum * padDurs.sum;
 
     durs;
 };
@@ -299,9 +346,11 @@ var getChords = {|durs, disp, chaos|
 };
 
 //
-var getMelody = {|chords, disp, chaos|
-    var notes;
+var getMelody = {|leadDurs, padDurs, chords, disp, chaos|
+    var notes, aligned;
     var cons, diss, wcons, wdiss, thresh;
+
+    aligned = alignTime.value(leadDurs, padDurs);
 
     cons = [0, 2, 4];
     diss = [1, 3, 6];
@@ -309,13 +358,15 @@ var getMelody = {|chords, disp, chaos|
     wcons = 2 ! cons.size;
     wdiss = chaos ! diss.size;
 
-    notes = chords.collect {|ch|
-        var choices, wchoices;
+    notes = Array.fill(leadDurs.size, {|idx|
+        var chord, choices, wchoices;
 
-        choices = [ch, ch + 2, ch + 4, cons, diss].flat;
+        chord = chords[aligned[idx]];
+
+        choices = [chord, chord + 2, chord + 4, cons, diss].flat;
         wchoices = [1, 1, 1, wcons, wdiss].flat;
         choices.wchoose(wchoices.normalizeSum(1));
-    };
+    });
 
     notes;
 };
@@ -323,7 +374,7 @@ var getMelody = {|chords, disp, chaos|
 //
 var getSection = Routine {|init|
     var sectionBars, root, mode;
-    var amp, durs;
+    var leadAmps, padAmps, leadDurs, padDurs;
     var chords, notes;
     var oldDisp, newDisp, dDisp;
     var oldEnergy, newEnergy, dEnergy;
@@ -334,15 +385,19 @@ var getSection = Routine {|init|
     # oldDisp, oldEnergy, oldChaos, sectionBars, root, mode = init;
 
     // Initialize values
-    durs = getDurs.value(sectionBars, oldEnergy, oldChaos);
-    amp = getAmps.value(durs, oldEnergy, oldChaos);
+    padDurs = getPadDurs.value(sectionBars, oldEnergy, oldChaos);
+    padAmps = getAmps.value(padDurs, oldEnergy, oldChaos);
+    leadDurs = getLeadDurs.value(padDurs, oldEnergy, oldChaos);
+    leadAmps = getAmps.value(leadDurs, oldEnergy, oldChaos);
 
-    chords = getChords.value(durs, oldDisp, oldChaos);
-    notes = getMelody.value(chords, oldDisp, oldChaos);
+    chords = getChords.value(padDurs, oldDisp, oldChaos);
+    notes = getMelody.value(leadDurs, padDurs, chords, oldDisp, oldChaos);
 
     inf.do {
-        "Amp: %\n".postf(amp);
-        "Durs: %\n".postf(durs);
+        "Lead Amps: %\n".postf(leadAmps);
+        "Pad Amps: %\n".postf(padAmps);
+        "Lead Durs: %\n".postf(leadDurs);
+        "Pad Durs: %\n".postf(padDurs);
         "Chords: %\n".postf(chords);
         "Notes: %\n".postf(notes);
 
@@ -350,8 +405,8 @@ var getSection = Routine {|init|
         lead = Pmono(
             \winwoodlead,
             \degree, Pseq(notes),
-            \amp, Pseq(amp),
-            \dur, Pseq(durs),
+            \amp, Pseq(leadAmps),
+            \dur, Pseq(leadDurs),
             \scale, Scale.at(mode),
             \ctranspose, root,
             \octave, [5, 6].choose,
@@ -359,21 +414,12 @@ var getSection = Routine {|init|
             \lfowidth, 0.005,
             \cutoff, 2000
         );
-        pad = Pbind(
-            \instrument, \default,
-            \degree, Pseq([chords, chords + 2, chords + 4].flop),
-            \amp, Pseq(amp),
-            \dur, Pseq(durs),
-            \scale, Scale.at(mode),
-            \ctranspose, root,
-            \octave, 4
-        );
         pad = Pfx(
             Pbind(
                 \instrument, \everythingrhodes,
                 \degree, Pseq([chords, chords + 2, chords + 4].flop),
-                \amp, Pseq(amp * 0.1),
-                \dur, Pseq(durs),
+                \amp, Pseq(padAmps * 0.1),
+                \dur, Pseq(padDurs),
                 \scale, Scale.at(mode),
                 \ctranspose, root,
                 \octave, 4,
@@ -389,11 +435,13 @@ var getSection = Routine {|init|
         dChaos = newChaos - oldChaos;
 
         // Update values
-        durs = getDurs.value(sectionBars, newEnergy, newChaos);
-        amp = getAmps.value(durs, newEnergy, newChaos);
+        padDurs = getPadDurs.value(sectionBars, newEnergy, newChaos);
+        padAmps = getAmps.value(padDurs, newEnergy, newChaos);
+        leadDurs = getLeadDurs.value(padDurs, newEnergy, newChaos);
+        leadAmps = getAmps.value(leadDurs, newEnergy, newChaos);
 
-        chords = getChords.value(durs, newDisp, newChaos);
-        notes = getMelody.value(chords, newDisp, newChaos);
+        chords = getChords.value(padDurs, newDisp, newChaos);
+        notes = getMelody.value(leadDurs, padDurs, chords, newDisp, newChaos);
 
         oldDisp = newDisp;
         oldEnergy = newEnergy;
@@ -467,8 +515,6 @@ var main = {
 
         // Wait for values to be initialized
         inited.wait;
-        minVars.postln;
-        maxVars.postln;
 
         inf.do {
             // Update global music values
