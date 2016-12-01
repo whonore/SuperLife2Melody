@@ -1,5 +1,68 @@
+/*** Synth Defs ***/
 (
-/** Image processing **/
+// Sound recipes from:
+// Mitchell Sigman (2011) Steal this Sound. Milwaukee, WI: Hal Leonard Books
+// adapted for SuperCollider and elaborated by Nick Collins (http://www.sussex.ac.uk/Users/nc81/index.html)
+// under GNU GPL 3 as per SuperCollider license
+
+SynthDef(\winwoodlead, {
+    |out = 0, freq = 440, amp = 0.1, gate = 1, cutoff = 8000, rq = 0.8,
+    lfowidth = 0.01, lforate = 8, lagamount = 0.01, pan = 0.0|
+    var pulse, filter, env, lfo;
+
+    lfo = LFTri.kr(lforate, Rand(0, 2.0) ! 2);
+    pulse = Mix(Pulse.ar(
+        (freq.lag(lagamount)) * [1, 1.001] * (1.0 + (lfowidth * lfo)),
+        [0.2, 0.19]
+    )) * 0.5;
+    filter =  RLPF.ar(pulse, cutoff, rq);
+
+    // remove low end
+    filter = BLowShelf.ar(filter, 351, 1.0, -9);
+    env = EnvGen.ar(Env.adsr(0.01, 0.0, 0.9, 0.05), gate, doneAction: 2);
+
+    Out.ar(out, Pan2.ar(filter * env * amp, pan));
+}).add;
+
+SynthDef(\everythingrhodes, {
+    |out = 0, freq = 440, amp = 0.1, gate = 1, lforate = 4.85,
+    lfowidth = 0.5, cutoff = 2000, rq = 0.5, pan = 0.0|
+    var pulse, filter, env;
+
+    pulse = Pulse.ar(freq * [1, 33.5.midiratio], [0.2, 0.1], [0.7, 0.3]);
+    env = EnvGen.ar(Env.adsr(0.0, 1.0, 0.8, 3.0), gate, doneAction: 2);
+
+    // keyboard tracking filter cutoff
+    filter = BLowPass4.ar(pulse, (cutoff * (env.squared)) + 200 + freq, rq);
+
+    Out.ar(out, Pan2.ar(Mix(filter) * env * amp, pan));
+}).add;
+
+SynthDef(\choruscompresseffect, {|out = 0, gate = 1|
+    var source, chorus, env;
+
+    source = In.ar(out, 2);
+    env = Linen.kr(gate, 0.1, 1, 0.1, 2);
+
+    chorus = Splay.ar(Array.fill(4, {
+        var maxdelaytime = rrand(0.005, 0.02);
+
+        DelayC.ar(
+            source[0],
+            maxdelaytime,
+            LFNoise1.kr(Rand(0.1, 0.6), 0.25 * maxdelaytime, 0.75 * maxdelaytime)
+        );
+    }));
+
+    chorus = Compander.ar(4 * (source + chorus), source, 0.4, 1, 4);
+
+    XOut.ar(out, env, chorus);
+}).add;
+);
+
+/*** Music ***/
+(
+/*** Image processing ***/
 
 // Take a random nrows x ncols section of img
 var getSegment = {|img, nrows, ncols|
@@ -130,7 +193,7 @@ var updateMode = Routine {|initDisp|
     // Initialize mode
     oldDisp.linlin(0, 1, 0, 6).round.postln;
     mode = [
-        \locrian, \phyrgian, \minor, \dorian, \mixolydian, \lydian, \major
+        \locrian, \phrygian, \minor, \dorian, \mixolydian, \lydian, \major
     ][oldDisp.linlin(0, 1, 0, 6).round];
 
     inf.do {
@@ -215,7 +278,8 @@ var getChords = {|durs, disp, chaos|
         subdom: [1, 3],
         dom: [4, 6]
     );
-    chords = List[0];
+    chords = Array.new(durs.size);
+    chords.add(0);
 
     chaos = chaos.linlin(0, 1, 0, 0.2);
 
@@ -259,7 +323,7 @@ var getMelody = {|chords, disp, chaos|
 //
 var getSection = Routine {|init|
     var sectionBars, root, mode;
-    var amp, durs, sustain;
+    var amp, durs;
     var chords, notes;
     var oldDisp, newDisp, dDisp;
     var oldEnergy, newEnergy, dEnergy;
@@ -272,7 +336,6 @@ var getSection = Routine {|init|
     // Initialize values
     durs = getDurs.value(sectionBars, oldEnergy, oldChaos);
     amp = getAmps.value(durs, oldEnergy, oldChaos);
-    sustain = 1 ! (4 * sectionBars);
 
     chords = getChords.value(durs, oldDisp, oldChaos);
     notes = getMelody.value(chords, oldDisp, oldChaos);
@@ -284,27 +347,41 @@ var getSection = Routine {|init|
         "Notes: %\n".postf(notes);
 
         // Create instruments
-        lead = Pbind(
-            \instrument, \default,
+        lead = Pmono(
+            \winwoodlead,
             \degree, Pseq(notes),
             \amp, Pseq(amp),
             \dur, Pseq(durs),
-            // \sustain, Pseq(sustain),
             \scale, Scale.at(mode),
             \ctranspose, root,
-            \octave, [5, 6].choose
+            \octave, [5, 6].choose,
+            \lagamount, 0.1,
+            \lfowidth, 0.005,
+            \cutoff, 2000
         );
         pad = Pbind(
             \instrument, \default,
-            \degree, Pseq(chords),
+            \degree, Pseq([chords, chords + 2, chords + 4].flop),
             \amp, Pseq(amp),
             \dur, Pseq(durs),
-            // \sustain, Pseq(sustain),
             \scale, Scale.at(mode),
             \ctranspose, root,
             \octave, 4
         );
-        section = Ppar([lead, pad, Padd(\degree, 2, pad), Padd(\degree, 4, pad)]);
+        pad = Pfx(
+            Pbind(
+                \instrument, \everythingrhodes,
+                \degree, Pseq([chords, chords + 2, chords + 4].flop),
+                \amp, Pseq(amp * 0.1),
+                \dur, Pseq(durs),
+                \scale, Scale.at(mode),
+                \ctranspose, root,
+                \octave, 4,
+                \cutoff, 1000
+            ),
+            \choruscompresseffect
+        );
+        section = Ppar([lead, pad]);
 
         # newDisp, newEnergy, newChaos, sectionBars, root, mode = yield(section);
         dDisp = newDisp - oldDisp;
