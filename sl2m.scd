@@ -178,7 +178,7 @@ var updateRoot = Routine {|initVars|
     var oldVars, newVars, dVars;
 
     oldVars = initVars;
-    thresh = 0.05;
+    thresh = 0.1;
 
     // Initialize root
     root = 0;
@@ -196,9 +196,7 @@ var updateRoot = Routine {|initVars|
         choices = choices.clip2(3);
 
         // Update root
-        root = case
-        { abs(dVars[\disposition]) > thresh } { choices.asSet.choose; }
-        { root }; // No change
+        root = if (1.0.rand <= thresh, { choices.asSet.choose; }, { root; });
 
         oldVars = newVars;
     };
@@ -242,20 +240,29 @@ var updateMode = Routine {|initVars|
 
 // Choose the new tempo as a function of energy
 var updateTempo = Routine {|initVars|
-    var tempo;
+    var tempo, minTempo, maxTempo, tempoBound;
     var oldVars, newVars, dVars;
 
     oldVars = initVars;
 
     // Initialize tempo
-    tempo = 60;
+    minTempo = 30;
+    maxTempo = 120;
+    tempoBound = 10;
+    tempo = if (oldVars[\energy] <= 0.5,
+        { oldVars[\energy].lincurve(0, 0.5, minTempo, [minTempo, maxTempo].mean, 2); },
+        { oldVars[\energy].lincurve(0.5, 1, [minTempo, maxTempo].mean, maxTempo, -2); }
+    );
 
     inf.do {
         newVars = yield(tempo / 60);
         dVars = merge(newVars, oldVars, {|x, y| x - y; });
 
         // Update tempo
-        tempo = tempo;
+        tempo = if (newVars[\energy] <= 0.5,
+            { newVars[\energy].lincurve(0, 0.5, minTempo, [minTempo, maxTempo].mean, 2); },
+            { newVars[\energy].lincurve(0.5, 1, [minTempo, maxTempo].mean, maxTempo, -2); }
+        ).clip(tempo - tempoBound, tempo + tempoBound);
 
         oldVars = newVars;
     };
@@ -565,11 +572,3 @@ var main = {
 
 main.value();
 );
-
-
-{ SinOsc.ar(440) }.plot(0.01);
-{ Line.kr(0, 0.5, 0.5).lincurve(0, 1, 30, 120, -2) }.plot(0.5);
-{ Line.kr(0.5, 1, 0.5).lincurve(0, 1, 30, 120, 2) }.plot(0.5);
-Line.kr(-1, 5, 0.1).linlin(0, 3, -1, 1);
-
-{ Line.kr(0, 1, 1) }.scope;
