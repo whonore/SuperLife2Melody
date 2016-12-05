@@ -68,9 +68,11 @@ SynthDef(\choruscompresseffect, {|out = 0, gate = 1|
 var getSegment = {|img, nrows, ncols|
     var seg, pixels, startRow, startCol;
 
+    // Keep within image size
     nrows = min(nrows, img.height);
     ncols = min(ncols, img.width);
 
+    // Choose where to start
     startRow = (img.height - nrows + 1).rand;
     startCol = (img.width - ncols + 1).rand;
 
@@ -79,6 +81,7 @@ var getSegment = {|img, nrows, ncols|
     pixels = pixels.reshape(nrows, img.width);
     pixels = pixels.collect {|row| row[startCol .. (startCol + ncols) - 1]; };
 
+    // Copy pixels
     seg = Image.new(ncols, nrows);
     seg.pixels = Int32Array.newFrom(pixels.flat);
 
@@ -89,6 +92,7 @@ var getSegment = {|img, nrows, ncols|
 var getColor = {|img, x, y|
     var pxVal = img.getPixel(x, y);
 
+    // pxVal is #AARRGGBB
     Color.new255(
         (pxVal >> 16) & 0xFF,
         (pxVal >> 8) & 0xFF,
@@ -168,7 +172,7 @@ var alignTime = {|durs1, durs2|
 
 /*** Music Algorithms ***/
 
-//
+// Choose the new root by moving up or down 1 or 2 steps
 var updateRoot = Routine {|initVars|
     var root, thresh;
     var oldVars, newVars, dVars;
@@ -185,19 +189,22 @@ var updateRoot = Routine {|initVars|
         newVars = yield(root);
         dVars = merge(newVars, oldVars, {|x, y| x - y; });
 
+        // Up or down 1 or 2 steps
         choices = root + [-2, -1, 1, 2];
+
+        // Clip within +/- 3 of original root
         choices = choices.clip2(3);
 
         // Update root
         root = case
-        { abs(dVars[\disposition]) > thresh } { choices.asSet.choose; } //
+        { abs(dVars[\disposition]) > thresh } { choices.asSet.choose; }
         { root }; // No change
 
         oldVars = newVars;
     };
 };
 
-//
+// Choose the new mode using a NFA
 var updateMode = Routine {|initVars|
     var mode, trans, thresh;
     var oldVars, newVars, dVars;
@@ -233,7 +240,7 @@ var updateMode = Routine {|initVars|
     };
 };
 
-//
+// Choose the new tempo as a function of energy
 var updateTempo = Routine {|initVars|
     var tempo;
     var oldVars, newVars, dVars;
@@ -254,21 +261,24 @@ var updateTempo = Routine {|initVars|
     };
 };
 
-//
+// Choose the duration for the pad instrument based on energy
 var getPadDurs = {|inVars, sectionBars|
     var durs;
     var subDivs, subDiv;
 
-    subDivs = [[1, 2], [4, 8]];
+    // Choose based on energy
+    subDivs = [[2], [4, 8]];
     subDiv = subDivs[inVars[\energy].round].choose;
-    //if ((subDiv > 2) && { 1.0.rand < chaos }, { subDiv = subDiv + [-1, 1].choose; });
+
+    // Have a chance of changing to a non-binary division
+    if (1.0.rand < inVars[\chaos], { subDiv = subDiv + (-1 .. 1).choose; });
 
     durs = (4 / subDiv) ! (sectionBars * subDiv);
 
     durs;
 };
 
-//
+// Choose the durations for the lead instruments by transforming the pad durations
 var getLeadDurs = {|inVars, padDurs|
     var durs;
     var choices, choice;
@@ -281,8 +291,8 @@ var getLeadDurs = {|inVars, padDurs|
         quad: {|dur| dur.stutter(4) / 4; }
     );
 
+    // Transform padDurs
     choice = [\half, \same, \double, \triple, \quad][inVars[\energy].linlin(0, 1, 0, 4).round];
-
     durs = choices[choice].value(padDurs);
 
     // durs +/- chaos
@@ -292,20 +302,21 @@ var getLeadDurs = {|inVars, padDurs|
     durs;
 };
 
-//
+// Choose the amplitudes as a function of energy
 var getAmps = {|inVars, durs|
     var amp;
 
     amp = Array.fill(durs.size, {
-        inVars[\energy].linlin(0, 1, 0.3, 0.7) + ([-1, 1].choose * inVars[\chaos].linlin(0, 1, 0, 0.1).rand);
+        inVars[\energy].linlin(0, 1, 0.3, 0.7)
+        + ([-1, 1].choose * inVars[\chaos].linlin(0, 1, 0, 0.1).rand);
     });
 
     amp;
 };
 
-//
+// Choose the chords by functional type
 var getChords = {|inVars, durs|
-    var chords;
+    var chords, type;
     var chordTrans, chord2Type, type2Chord;
 
     chordTrans = (
@@ -313,27 +324,28 @@ var getChords = {|inVars, durs|
         subdom: [[\tonic, 0], [\subdom, 0.1], [\dom, 0.9]],
         dom: [[\tonic, 0.9], [\subdom, 0], [\dom, 0.1]]
     );
-    chord2Type = (
-        0: \tonic, 2: \tonic, 5: \tonic,
-        1: \subdom, 3: \subdom,
-        4: \dom, 6: \dom
-    );
     type2Chord = (
         tonic: [0, 2, 5],
         subdom: [1, 3],
         dom: [4, 6]
     );
+
+    // Start at tonic
     chords = Array.new(durs.size);
     chords.add(0);
+    type = \tonic;
 
     (durs.size - 1).do {
-        var type, wchords;
+        var wchords;
 
-        type = chord2Type[chords.last];
+        // Get transition probabilities
         wchords = chordTrans[type].flop;
+
+        // Add variation
         wchords[1] = wchords[1] + inVars[\chaos].linlin(0, 1, 0, 0.2).rand;
         wchords[1] = wchords[1].normalizeSum;
 
+        // Choose next chord type and chord
         type = wchoose(wchords[0], wchords[1]);
         chords.add(type2Chord[type].choose);
     };
@@ -341,33 +353,38 @@ var getChords = {|inVars, durs|
     chords;
 };
 
-//
+// Choose the lead notes from among the chord tones and other intervals
 var getMelody = {|inVars, leadDurs, padDurs, chords|
     var notes, aligned;
     var cons, diss, wcons, wdiss, thresh;
 
+    // Align the lead and pad durations
     aligned = alignTime.value(leadDurs, padDurs);
 
+    // Consonant and dissonant intervals
     cons = [0, 2, 4];
     diss = [1, 3, 6];
 
+    // Corresponding weights
     wcons = 2 ! cons.size;
     wdiss = inVars[\chaos] ! diss.size;
 
     notes = Array.fill(leadDurs.size, {|idx|
         var chord, choices, wchoices;
 
+        // Look at the current chord
         chord = chords[aligned[idx]];
 
+        // Choose from the chord tones, consonant intervals, and dissonant intervals
         choices = [chord, chord + 2, chord + 4, cons, diss].flat;
-        wchoices = [1, 1, 1, wcons, wdiss].flat;
+        wchoices = [1 ! 3, wcons, wdiss].flat;
         choices.wchoose(wchoices.normalizeSum(1));
     });
 
     notes;
 };
 
-//
+// Create a 4-bar section
 var getSection = Routine {|init|
     var sectionBars, root, mode;
     var leadAmps, padAmps, leadDurs, padDurs;
@@ -441,7 +458,7 @@ var getSection = Routine {|init|
 
 /*** Main loop ***/
 
-//
+// Infinitely analyze the input and generate music
 var main = {
     var win, segWin, stopButton, nextButton;
     var imgs, img, seg, segSize;
@@ -492,6 +509,7 @@ var main = {
                 maxVars = merge(inVars, maxVars, {|x, y| max(x, y); });
             };
 
+            // Scale vars
             inVars = inVars.collect {|v, k|
                 v.linlin(minVars[k], maxVars[k], 0, 1);
             };
@@ -547,3 +565,11 @@ var main = {
 
 main.value();
 );
+
+
+{ SinOsc.ar(440) }.plot(0.01);
+{ Line.kr(0, 0.5, 0.5).lincurve(0, 1, 30, 120, -2) }.plot(0.5);
+{ Line.kr(0.5, 1, 0.5).lincurve(0, 1, 30, 120, 2) }.plot(0.5);
+Line.kr(-1, 5, 0.1).linlin(0, 3, -1, 1);
+
+{ Line.kr(0, 1, 1) }.scope;
