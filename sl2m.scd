@@ -478,8 +478,16 @@ var main = {
     var play, clock;
 
     // Initialize input
-    paths = PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs").files;
-    imgs = Pxrand(paths.collect {|path| Image.new(path.fullPath);}, inf).asStream;
+
+    // Allow random images
+    // paths = PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs").files;
+    // imgs = Pxrand(paths.collect {|path| Image.new(path.fullPath); }, inf).asStream;
+
+    // Demo mode
+    paths = ["space", "fire", "trees", "noise"];
+    paths = paths.collect {|path| PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs" +/+ path); };
+    imgs = Pseq(paths.collect {|path| Image.new(path.fullPath); }, inf).asStream;
+
     img = imgs.next;
     segSize = 40;
 
@@ -504,13 +512,6 @@ var main = {
     };
 
     segWin = Window.new;
-
-    /*img = [
-        Image.color(200, 200, Color.blue(0.2)),
-        Image.color(200, 200, Color.blue(0.8)),
-        Image.color(200, 200, Color.red(0.2)),
-        Image.color(200, 200, Color.red(0.8))
-    ][4];*/
 
     // Song loop
     play = Routine {
@@ -552,8 +553,6 @@ var main = {
                 inVars = analyze.value(seg);
 
                 // Rescale inVars
-                //minVars = merge(inVars, minVars, {|x, y| min(x, y); });
-                //maxVars = merge(inVars, maxVars, {|x, y| max(x, y); });
                 inVars = inVars.collect {|v, k|
                     v.linlin(minVars[k], maxVars[k], 0, 1);
                 };
