@@ -230,8 +230,8 @@ var updateMode = Routine {|initVars|
 
         // Update mode
         mode = case
-        { dVars[\disposition] > thresh } { trans[mode][\up].choose } // Go up
-        { dVars[\disposition] < thresh.neg } { trans[mode][\down].choose } // Go down
+        { dVars[\disposition] > thresh } { trans[mode][\up].choose; } // Go up
+        { dVars[\disposition] < thresh.neg } { trans[mode][\down].choose; } // Go down
         { mode }; // No change
 
         oldVars = newVars;
@@ -247,7 +247,7 @@ var updateTempo = Routine {|initVars|
 
     // Initialize tempo
     minTempo = 30;
-    maxTempo = 120;
+    maxTempo = 100;
     tempoBound = 10;
     tempo = if (oldVars[\energy] <= 0.5,
         { oldVars[\energy].lincurve(0, 0.5, minTempo, [minTempo, maxTempo].mean, 2); },
@@ -286,11 +286,11 @@ var getPadDurs = {|inVars, sectionBars|
 };
 
 // Choose the durations for the lead instruments by transforming the pad durations
-var getLeadDurs = {|inVars, padDurs|
+var getLeadDurs = {|inVars, padDurs, tempo|
     var durs;
-    var choices, choice;
+    var transforms, choices, choice;
 
-    choices = (
+    transforms = (
         half: {|dur| dur[0, 2 ..] * 2; }, // Only works assuming padDurs is even in length
         same: {|dur| dur; },
         double: {|dur| dur.stutter(2) / 2; },
@@ -299,10 +299,11 @@ var getLeadDurs = {|inVars, padDurs|
     );
 
     // Transform padDurs
-    choice = [\half, \same, \double, \triple, \quad][inVars[\energy].linlin(0, 1, 0, 4).round];
-    durs = choices[choice].value(padDurs);
-
-    // durs +/- chaos
+    choices = [\half, \same, \double, \triple, \quad].select {|trans|
+        (transforms[trans].value(padDurs)[0] / tempo) > 0.1;
+    };
+    choice = choices[inVars[\energy].linlin(0, 1, 0, choices.size).round];
+    durs = transforms[choice].value(padDurs);
 
     durs = durs.normalizeSum * padDurs.sum;
 
@@ -310,15 +311,19 @@ var getLeadDurs = {|inVars, padDurs|
 };
 
 // Choose the amplitudes as a function of energy
-var getAmps = {|inVars, durs|
-    var amp;
+var getAmps = {|inVars, durs, lastAmp = 0.5|
+    var amps, targetAmp;
 
-    amp = Array.fill(durs.size, {
-        inVars[\energy].linlin(0, 1, 0.3, 0.7)
-        + ([-1, 1].choose * inVars[\chaos].linlin(0, 1, 0, 0.1).rand);
-    });
+    // Compute the target amplitude
+    targetAmp = inVars[\energy].linlin(0, 1, 0.3, 0.7);
 
-    amp;
+    // Step linearly to the target amplitude
+    amps = Array.series(durs.size, lastAmp, (targetAmp - lastAmp) / durs.size);
+
+    // Add variation
+    amps = amps + ({ inVars[\chaos].linlin(0, 1, -0.05, 0.05).rand; } ! durs.size);
+
+    amps;
 };
 
 // Choose the chords by functional type
@@ -393,19 +398,19 @@ var getMelody = {|inVars, leadDurs, padDurs, chords|
 
 // Create a 4-bar section
 var getSection = Routine {|init|
-    var sectionBars, root, mode;
+    var sectionBars, root, mode, tempo;
     var leadAmps, padAmps, leadDurs, padDurs;
     var chords, notes;
     var oldVars, newVars, dVars;
     var lead, pad;
     var section;
 
-    # oldVars, sectionBars, root, mode = init;
+    # oldVars, sectionBars, root, mode, tempo = init;
 
     // Initialize values
     padDurs = getPadDurs.value(oldVars, sectionBars);
     padAmps = getAmps.value(oldVars, padDurs);
-    leadDurs = getLeadDurs.value(oldVars, padDurs);
+    leadDurs = getLeadDurs.value(oldVars, padDurs, tempo);
     leadAmps = getAmps.value(oldVars, leadDurs);
 
     chords = getChords.value(oldVars, padDurs);
@@ -447,14 +452,14 @@ var getSection = Routine {|init|
         );
         section = Ppar([lead, pad]);
 
-        # newVars, sectionBars, root, mode = yield(section);
+        # newVars, sectionBars, root, mode, tempo = yield(section);
         dVars = merge(newVars, oldVars, {|x, y| x - y; });
 
         // Update values
         padDurs = getPadDurs.value(newVars, sectionBars);
-        padAmps = getAmps.value(newVars, padDurs);
-        leadDurs = getLeadDurs.value(newVars, padDurs);
-        leadAmps = getAmps.value(newVars, leadDurs);
+        padAmps = getAmps.value(newVars, padDurs, padAmps.last);
+        leadDurs = getLeadDurs.value(newVars, padDurs, tempo);
+        leadAmps = getAmps.value(newVars, leadDurs, leadAmps.last);
 
         chords = getChords.value(newVars, padDurs);
         notes = getMelody.value(newVars, leadDurs, padDurs, chords);
@@ -468,14 +473,14 @@ var getSection = Routine {|init|
 // Infinitely analyze the input and generate music
 var main = {
     var win, segWin, stopButton, nextButton;
-    var imgs, img, seg, segSize;
+    var paths, imgs, img, seg, segSize;
     var root, mode, tempo;
     var play, clock;
 
     // Initialize input
-    imgs = PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs").files;
-    imgs = Pxrand(imgs, inf).asStream;
-    img = Image.new(imgs.next.fullPath);
+    paths = PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs").files;
+    imgs = Pxrand(paths.collect {|path| Image.new(path.fullPath);}, inf).asStream;
+    img = imgs.next;
     segSize = 40;
 
     // Initialize display
@@ -490,7 +495,7 @@ var main = {
     nextButton = Button(win, stopButton.bounds.left_(win.bounds.width / 2));
     nextButton.states = [["Next", Color.black, Color.white]];
     nextButton.action = {
-        img = Image.new(imgs.next.fullPath);
+        img = imgs.next;
 
         win.bounds = img.bounds.height_(img.bounds.height + 30);
         win.view.backgroundImage = img;
@@ -498,40 +503,69 @@ var main = {
         nextButton.bounds = stopButton.bounds.left_(win.bounds.width / 2);
     };
 
+    segWin = Window.new;
+
+    /*img = [
+        Image.color(200, 200, Color.blue(0.2)),
+        Image.color(200, 200, Color.blue(0.8)),
+        Image.color(200, 200, Color.red(0.2)),
+        Image.color(200, 200, Color.red(0.8))
+    ][4];*/
+
     // Song loop
     play = Routine {
-        var inited, section, sectionBars;
+        var ready, section, sectionBars;
         var inVars, minVars, maxVars;
 
         // Initialize values
-        inited = Condition.new(false);
+        ready = Condition.new(false);
         {
             // Find bounds for vars
             minVars = ();
             maxVars = ();
-            10.do {
-                seg = getSegment.value(img, segSize, segSize);
-                inVars = analyze.value(seg);
-                minVars = merge(inVars, minVars, {|x, y| min(x, y); });
-                maxVars = merge(inVars, maxVars, {|x, y| max(x, y); });
+            paths.do {|path|
+                var initImg;
+                initImg = Image.new(path.fullPath);
+
+                30.do {
+                    seg = getSegment.value(initImg, segSize, segSize);
+                    inVars = analyze.value(seg);
+                    minVars = merge(inVars, minVars, {|x, y| min(x, y); });
+                    maxVars = merge(inVars, maxVars, {|x, y| max(x, y); });
+                };
             };
 
-            // Scale vars
-            inVars = inVars.collect {|v, k|
-                v.linlin(minVars[k], maxVars[k], 0, 1);
-            };
-
-            segWin = seg.plot("Current Segment");
-
-            inited.test = true;
-            inited.signal;
-        }.defer;
+            ready.test = true;
+            ready.signal;
+        }.defer(0);
         sectionBars = 4;
 
         // Wait for values to be initialized
-        inited.wait;
+        ready.wait;
 
         inf.do {
+            ready.test = false;
+            // Update input values
+            {
+                segWin.close;
+                seg = getSegment.value(img, segSize, segSize);
+                inVars = analyze.value(seg);
+
+                // Rescale inVars
+                //minVars = merge(inVars, minVars, {|x, y| min(x, y); });
+                //maxVars = merge(inVars, maxVars, {|x, y| max(x, y); });
+                inVars = inVars.collect {|v, k|
+                    v.linlin(minVars[k], maxVars[k], 0, 1);
+                };
+
+                segWin = seg.plot("Current Segment");
+
+                ready.test = true;
+                ready.signal;
+            }.defer(0);
+
+            ready.wait;
+
             // Update global music values
             root = updateRoot.next(inVars);
             mode = updateMode.next(inVars);
@@ -541,24 +575,8 @@ var main = {
 
             // Play next section
             clock.tempo = tempo;
-            section = getSection.next([inVars, sectionBars, root, mode]);
+            section = getSection.next([inVars, sectionBars, root, mode, tempo]);
             section.play(clock);
-
-            // Update input values
-            {
-                segWin.close;
-                seg = getSegment.value(img, segSize, segSize);
-                inVars = analyze.value(seg);
-
-                // Rescale inVars
-                minVars = merge(inVars, minVars, {|x, y| min(x, y); });
-                maxVars = merge(inVars, maxVars, {|x, y| max(x, y); });
-                inVars = inVars.collect {|v, k|
-                    v.linlin(minVars[k], maxVars[k], 0, 1);
-                };
-
-                segWin = seg.plot("Current Segment");
-            }.defer;
 
             // Wait for section to end
             clock.bars2beats(sectionBars).wait;
