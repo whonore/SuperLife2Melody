@@ -170,6 +170,17 @@ var alignTime = {|durs1, durs2|
     aligned - 1;
 };
 
+var interpolate = {|old, new, len|
+	var step;
+
+	step = (new - old) / len;
+
+	if (step == 0,
+		{ old ! len; },
+		{ (old, old + step .. new); }
+	);
+};
+
 /*** Music Algorithms ***/
 
 // Choose the new root by moving up or down 1 or 2 steps
@@ -269,20 +280,23 @@ var updateTempo = Routine {|initVars|
 };
 
 // Choose the duration for the pad instrument based on energy
-var getPadDurs = {|inVars, sectionBars|
+var getPadDurs = {|inVars|
     var durs;
     var subDivs, subDiv;
 
     // Choose based on energy
     subDivs = [[2], [4, 8]];
-    subDiv = subDivs[inVars[\energy].round].choose;
 
-    // Have a chance of changing to a non-binary division
-    if (1.0.rand < inVars[\chaos], { subDiv = subDiv + (-1 .. 1).choose; });
+	durs = inVars[\energy].collect {|en, idx|
+		subDiv = subDivs[en.round].choose;
 
-    durs = (4 / subDiv) ! (sectionBars * subDiv);
+		// Have a chance of changing to a non-binary division
+		if (1.0.rand < inVars[\chaos][idx], { subDiv = subDiv + (-1 .. 1).choose; });
 
-    durs;
+		(4 / subDiv) ! (subDiv);
+	};
+
+    durs.flat;
 };
 
 // Choose the durations for the lead instruments by transforming the pad durations
@@ -311,17 +325,18 @@ var getLeadDurs = {|inVars, padDurs, tempo|
 };
 
 // Choose the amplitudes as a function of energy
-var getAmps = {|inVars, durs, lastAmp = 0.5|
-    var amps, targetAmp;
+var getAmps = {|inVars|
+    var amps;
 
-    // Compute the target amplitude
-    targetAmp = inVars[\energy].linlin(0, 1, 0.3, 0.7);
+	amps = inVars[\energy].collect {|en, idx|
+		var amp;
 
-    // Step linearly to the target amplitude
-    amps = Array.series(durs.size, lastAmp, (targetAmp - lastAmp) / durs.size);
+		// Compute amplitude
+		amp = en.linlin(0, 1, 0.3, 0.7);
 
-    // Add variation
-    amps = amps + ({ inVars[\chaos].linlin(0, 1, -0.05, 0.05).rand; } ! durs.size);
+		// Add variation
+		amp + inVars[\chaos][idx].linlin(0, 1, -0.05, 0.05).rand;
+	};
 
     amps;
 };
@@ -402,16 +417,19 @@ var getSection = Routine {|init|
     var leadAmps, padAmps, leadDurs, padDurs;
     var chords, notes;
     var oldVars, newVars, dVars;
+	var interpVars;
     var lead, pad;
     var section;
 
     # oldVars, sectionBars, root, mode, tempo = init;
 
+	interpVars = {|old, new, len| merge(old, new, {|x, y| interpolate.value(x, y, len); }); };
+
     // Initialize values
-    padDurs = getPadDurs.value(oldVars, sectionBars);
-    padAmps = getAmps.value(oldVars, padDurs);
+	padDurs = getPadDurs.value(interpVars.value(oldVars, oldVars, sectionBars));
+	padAmps = getAmps.value(interpVars.value(oldVars, oldVars, padDurs.size));
     leadDurs = getLeadDurs.value(oldVars, padDurs, tempo);
-    leadAmps = getAmps.value(oldVars, leadDurs);
+	leadAmps = getAmps.value(interpVars.value(oldVars, oldVars, leadDurs.size));
 
     chords = getChords.value(oldVars, padDurs);
     notes = getMelody.value(oldVars, leadDurs, padDurs, chords);
@@ -456,10 +474,10 @@ var getSection = Routine {|init|
         dVars = merge(newVars, oldVars, {|x, y| x - y; });
 
         // Update values
-        padDurs = getPadDurs.value(newVars, sectionBars);
-        padAmps = getAmps.value(newVars, padDurs, padAmps.last);
+		padDurs = getPadDurs.value(interpVars.value(oldVars, newVars, sectionBars));
+		padAmps = getAmps.value(interpVars.value(oldVars, newVars, padDurs.size));
         leadDurs = getLeadDurs.value(newVars, padDurs, tempo);
-        leadAmps = getAmps.value(newVars, leadDurs, leadAmps.last);
+		leadAmps = getAmps.value(interpVars.value(oldVars, newVars, leadDurs.size));
 
         chords = getChords.value(newVars, padDurs);
         notes = getMelody.value(newVars, leadDurs, padDurs, chords);
@@ -528,7 +546,7 @@ var main = {
                 var initImg;
                 initImg = Image.new(path.fullPath);
 
-                30.do {
+                1.do {
                     seg = getSegment.value(initImg, segSize, segSize);
                     inVars = analyze.value(seg);
                     minVars = merge(inVars, minVars, {|x, y| min(x, y); });
@@ -553,6 +571,10 @@ var main = {
                 inVars = analyze.value(seg);
 
                 // Rescale inVars
+				// Note: This still doesn't make the variables uniformly distributed
+				// Doing that would require having a reasonable approximation of
+				// the actual distribution, using that to compute the CDF, and then
+				// applying that to the original values (probability integral transform)
                 inVars = inVars.collect {|v, k|
                     v.linlin(minVars[k], maxVars[k], 0, 1);
                 };
