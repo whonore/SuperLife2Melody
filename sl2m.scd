@@ -233,7 +233,7 @@ var updateMode = Routine {|initVars|
     // Initialize mode
     mode = [
         \locrian, \phrygian, \minor, \dorian, \mixolydian, \lydian, \major
-    ][oldVars[\disposition].linlin(0, 1, 0, 6).round];
+    ].clipAt(oldVars[\disposition].linlin(0, 1, 0, trans.size).trunc);
 
     inf.do {
         newVars = yield(mode);
@@ -288,7 +288,7 @@ var getPadDurs = {|inVars|
     subDivs = [[2], [4, 8]];
 
     durs = inVars[\energy].collect {|energy, idx|
-        subDiv = subDivs[energy.round].choose;
+        subDiv = subDivs.clipAt(energy.linlin(0, 1, 0, subDivs.size).trunc);
 
         // Have a chance of changing to a non-binary division
         if (1.0.rand < inVars[\chaos][idx], { subDiv = subDiv + (-1 .. 1).choose; });
@@ -323,7 +323,9 @@ var getLeadDurs = {|inVars, padDurs, tempo|
         if (padDurs[idx].size.odd, { choices.remove(\half); });
 
         // Choose a transformation
-        choice = choices[energy.linlin(0, 1, 0, choices.size).round];
+        choice = choices.clipAt(energy.linlin(0, 1, 0, choices.size).trunc);
+
+        if (transforms[choice].value(padDurs[idx]).isNil, { [choices, choice, padDurs[idx]].postln;});
 
         // Apply the transformation
         transforms[choice].value(padDurs[idx]);
@@ -429,7 +431,6 @@ var getSection = Routine {|init|
     var oldVars, newVars, dVars;
     var interpVars;
     var lead, pad;
-    var section;
 
     # oldVars, sectionBars, root, mode, tempo = init;
 
@@ -455,20 +456,23 @@ var getSection = Routine {|init|
         "Chords: %\n".postf(chords);
         "Notes: %\n".postf(notes);
 
-        // Create instruments
-        lead = Pmono(
+        // Note: Part of the reason for the jarring transitions is Pmono
+        // Switching to Pbind or PmonoArtic with legato < 1 would transition better,
+        // but then it sounds less smooth
+        Pdef(\lead, Pmono(
             \winwoodlead,
             \degree, Pseq(notes),
-            \amp, Pseq(leadAmps),
+            \amp, Pseq(leadAmps * 0.5),
             \dur, Pseq(leadDurs),
             \scale, Scale.at(mode),
             \ctranspose, root,
+            \legato, 1,
             \octave, [5, 6].choose,
             \lagamount, 0.1,
             \lfowidth, 0.005,
             \cutoff, 2000
-        );
-        pad = Pfx(
+        ));
+        Pdef(\pad, Pfx(
             Pbind(
                 \instrument, \everythingrhodes,
                 \degree, Pseq([chords, chords + 2, chords + 4].flop),
@@ -480,10 +484,9 @@ var getSection = Routine {|init|
                 \cutoff, 1000
             ),
             \choruscompresseffect
-        );
-        section = Ppar([lead, pad]);
+        ));
 
-        # newVars, sectionBars, root, mode, tempo = yield(section);
+        # newVars, sectionBars, root, mode, tempo = yield(nil);
         dVars = merge(newVars, oldVars, {|x, y| x - y; });
 
         // Update values
@@ -497,7 +500,6 @@ var getSection = Routine {|init|
 
         chords = getChords.value(interpVars.value(oldVars, newVars, padDurs.size - 1), padDurs);
         notes = getMelody.value(interpVars.value(oldVars, newVars, leadDurs.size), leadDurs, padDurs, chords);
-
         oldVars = newVars;
     };
 };
@@ -578,6 +580,15 @@ var main = {
         // Wait for values to be initialized
         ready.wait;
 
+        // Start playing instruments
+        Pdef.removeAll;
+        Pdef.defaultQuant = 0;
+
+        Ppar([
+            Pdef(\lead, Pbind(\degree, \rest)),
+            Pdef(\pad, Pbind(\degree, \rest))
+        ]).play(clock);
+
         inf.do {
             ready.test = false;
             // Update input values
@@ -612,8 +623,7 @@ var main = {
 
             // Play next section
             clock.tempo = tempo;
-            section = getSection.next([inVars, sectionBars, root, mode, tempo]);
-            section.play(clock);
+            getSection.next([inVars, sectionBars, root, mode, tempo]);
 
             // Wait for section to end
             clock.bars2beats(sectionBars).wait;
