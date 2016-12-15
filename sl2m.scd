@@ -1,4 +1,5 @@
 /*** Synth Defs ***/
+/*** Evaluate this section once at the beginning ***/
 (
 // Sound recipes from:
 // Mitchell Sigman (2011) Steal this Sound. Milwaukee, WI: Hal Leonard Books
@@ -61,6 +62,7 @@ SynthDef(\choruscompresseffect, {|out = 0, gate = 1|
 );
 
 /*** Music ***/
+/*** Evaluate this section to start the music ***/
 (
 /*** Image Processing ***/
 
@@ -170,15 +172,18 @@ var alignTime = {|durs1, durs2|
     aligned - 1;
 };
 
-var interpolate = {|old, new, len|
-    var step;
+// Group adjacent equal values into lists
+var clumpAdjacent = {|xs|
+    var groups;
 
-    step = (new - old) / (len - 1);
+    groups = List[List[xs.first]];
 
-    if (step == 0,
-        { old ! len; },
-        { (old, old + step .. new); }
-    );
+    // If a = b, add it to the list, otherwise start a new list
+    xs.doAdjacentPairs {|a, b|
+        if (a == b, { groups.last.add(a); }, { groups.add(List[b]); });
+    };
+
+    groups;
 };
 
 /*** Music Algorithms ***/
@@ -189,6 +194,7 @@ var updateRoot = Routine {|initVars|
     var oldVars, newVars, dVars;
 
     oldVars = initVars;
+
     thresh = 0.1;
 
     // Initialize root
@@ -197,6 +203,7 @@ var updateRoot = Routine {|initVars|
     inf.do {
         var choices;
 
+        // Return root and wait
         newVars = yield(root);
         dVars = merge(newVars, oldVars, {|x, y| x - y; });
 
@@ -218,6 +225,8 @@ var updateMode = Routine {|initVars|
     var mode, trans, thresh;
     var oldVars, newVars, dVars;
 
+    oldVars = initVars;
+
     trans = (
         major: (up: [\major], down: [\lydian, \mixolydian]),
         lydian: (up: [\major], down: [\mixolydian]),
@@ -228,7 +237,6 @@ var updateMode = Routine {|initVars|
         locrian: (up: [\minor], down: [\locrian])
     );
     thresh = 0.05;
-    oldVars = initVars;
 
     // Initialize mode
     mode = [
@@ -236,6 +244,7 @@ var updateMode = Routine {|initVars|
     ].clipAt(oldVars[\disposition].linlin(0, 1, 0, trans.size).trunc);
 
     inf.do {
+        // Return mode and wait
         newVars = yield(mode);
         dVars = merge(newVars, oldVars, {|x, y| x - y; });
 
@@ -256,16 +265,18 @@ var updateTempo = Routine {|initVars|
 
     oldVars = initVars;
 
-    // Initialize tempo
     minTempo = 30;
     maxTempo = 100;
     tempoBound = 10;
+
+    // Initialize tempo
     tempo = if (oldVars[\energy] <= 0.5,
         { oldVars[\energy].lincurve(0, 0.5, minTempo, [minTempo, maxTempo].mean, 2); },
         { oldVars[\energy].lincurve(0.5, 1, [minTempo, maxTempo].mean, maxTempo, -2); }
     );
 
     inf.do {
+        // Return tempo and wait
         newVars = yield(tempo / 60);
         dVars = merge(newVars, oldVars, {|x, y| x - y; });
 
@@ -428,13 +439,14 @@ var getSection = Routine {|init|
     var sectionBars, root, mode, tempo;
     var leadAmps, padAmps, leadDurs, padDurs;
     var chords, notes;
+    var legatos;
     var oldVars, newVars, dVars;
     var interpVars;
     var lead, pad;
 
     # oldVars, sectionBars, root, mode, tempo = init;
 
-    interpVars = {|old, new, len| merge(old, new, {|x, y| interpolate.value(x, y, len); }); };
+    interpVars = {|old, new, len| merge(old, new, {|x, y| Array.interpolation(len, x, y); }); };
 
     // Initialize values
     padDurs = getPadDurs.value(interpVars.value(oldVars, oldVars, sectionBars));
@@ -449,24 +461,27 @@ var getSection = Routine {|init|
     notes = getMelody.value(interpVars.value(oldVars, oldVars, leadDurs.size), leadDurs, padDurs, chords);
 
     inf.do {
+        // Set legato to 1 for groups of the same note, but to 0.99 otherwise
+        // This makes the section transitions less jarring
+        legatos = clumpAdjacent.value(notes).collect {|group|
+            (1 ! (group.size - 1)) ++ 0.99;
+        }.flat;
+
         "Lead Amps: %\n".postf(leadAmps);
         "Pad Amps: %\n".postf(padAmps);
         "Lead Durs: %\n".postf(leadDurs);
         "Pad Durs: %\n".postf(padDurs);
-        "Chords: %\n".postf(chords);
         "Notes: %\n".postf(notes);
+        "Chords: %\n".postf(chords);
 
-        // Note: Part of the reason for the jarring transitions is Pmono
-        // Switching to Pbind or PmonoArtic with legato < 1 would transition better,
-        // but then it sounds less smooth
-        Pdef(\lead, Pmono(
+        Pdef(\lead, PmonoArtic(
             \winwoodlead,
             \degree, Pseq(notes),
             \amp, Pseq(leadAmps * 0.5),
             \dur, Pseq(leadDurs),
             \scale, Scale.at(mode),
             \ctranspose, root,
-            \legato, 1,
+            \legato, Pseq(legatos),
             \octave, [5, 6].choose,
             \lagamount, 0.1,
             \lfowidth, 0.005,
@@ -515,14 +530,9 @@ var main = {
 
     // Initialize input
 
-    // Allow random images
-    // paths = PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs").files;
-    // imgs = Pxrand(paths.collect {|path| Image.new(path.fullPath); }, inf).asStream;
-
-    // Demo mode
-    paths = ["space", "fire", "trees", "noise"];
-    paths = paths.collect {|path| PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs" +/+ path); };
-    imgs = Pseq(paths.collect {|path| Image.new(path.fullPath); }, inf).asStream;
+    // Randomize image order
+    paths = PathName.new(thisProcess.nowExecutingPath.dirname +/+ "imgs").files;
+    imgs = Pxrand(paths.collect {|path| Image.new(path.fullPath); }, inf).asStream;
 
     img = imgs.next;
     segSize = 40;
@@ -551,20 +561,23 @@ var main = {
 
     // Song loop
     play = Routine {
-        var ready, section, sectionBars;
+        var initIters, ready, section, sectionBars;
         var inVars, minVars, maxVars;
 
         // Initialize values
+        sectionBars = 4;
+        initIters = 30;
         ready = Condition.new(false);
         {
-            // Find bounds for vars
+            // Estimate bounds for vars
             minVars = ();
             maxVars = ();
+
             paths.do {|path|
                 var initImg;
                 initImg = Image.new(path.fullPath);
 
-                30.do {
+                initIters.do {
                     seg = getSegment.value(initImg, segSize, segSize);
                     inVars = analyze.value(seg);
                     minVars = merge(inVars, minVars, {|x, y| min(x, y); });
@@ -575,15 +588,14 @@ var main = {
             ready.test = true;
             ready.signal;
         }.defer(0);
-        sectionBars = 4;
 
         // Wait for values to be initialized
+        "Initializing".postln;
         ready.wait;
 
         // Start playing instruments
         Pdef.removeAll;
-        Pdef.defaultQuant = 0;
-
+        Pdef.defaultQuant = 1;
         Ppar([
             Pdef(\lead, Pbind(\degree, \rest)),
             Pdef(\pad, Pbind(\degree, \rest))
@@ -591,8 +603,9 @@ var main = {
 
         inf.do {
             ready.test = false;
+
             // Update input values
-            {
+            { // Defered because analyze and plot work with Windows and Images
                 segWin.close;
                 seg = getSegment.value(img, segSize, segSize);
                 inVars = analyze.value(seg);
